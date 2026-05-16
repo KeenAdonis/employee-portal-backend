@@ -27,4 +27,9 @@ class User extends Authenticatable
     protected $casts = [
         'is_temp_password' => 'boolean', // ✅ ADDED
     ];
+
+    public function notifications()
+    {
+        return $this->hasMany(Notification::class);
+    }
 }

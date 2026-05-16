@@ -36,8 +36,15 @@ return [
     ],
 
     'n8n' => [
-        'url' => env('N8N_WEBHOOK_URL'),
         'key' => env('N8N_API_KEY'),
+
+        'employee_invite' => [
+            'url' => env('N8N_WEBHOOK_URL'),
+        ],
+
+        'secure_documents' => [
+            'url' => env('N8N_SECURE_DOCS_URL'),
+        ],
     ],
 
 ];

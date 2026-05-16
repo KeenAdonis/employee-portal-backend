@@ -8,11 +8,13 @@ class Employee extends Model
 {
     protected $table = 'tb_employee_list';
 
-    protected $primaryKey = 'EmployeeNo';
-    public $incrementing = false;
-    protected $keyType = 'string';
+    protected $primaryKey = 'employee_id';
 
-    public $timestamps = false; // since wala ka created_at/updated_at
+    public $incrementing = true;
+
+    protected $keyType = 'int';
+
+    public $timestamps = false;
 
     protected $fillable = [
         'Status',
@@ -28,6 +30,8 @@ class Employee extends Model
         'EmailAddress',
         'DateHired',
         'Department',
+        'Company',
+        'IsSurveyExcluded',
         'CompanyStatus',
         'Position',
         'JobLevel',
@@ -37,4 +41,46 @@ class Employee extends Model
         'PagIbigNumber',
         'TIN',
     ];
+
+    /*
+    |--------------------------------------------------------------------------
+    | RELATIONSHIPS
+    |--------------------------------------------------------------------------
+    */
+
+    public function evaluatedSurveys()
+    {
+        return $this->hasMany(
+            EmployeeSurvey::class,
+            'evaluator_employee_id',
+            'employee_id'
+        );
+    }
+
+    public function topRankedSurveys()
+    {
+        return $this->hasMany(
+            EmployeeSurvey::class,
+            'top_employee_id',
+            'employee_id'
+        );
+    }
+
+    public function bottomRankedSurveys()
+    {
+        return $this->hasMany(
+            EmployeeSurvey::class,
+            'bottom_employee_id',
+            'employee_id'
+        );
+    }
+
+    public function surveyRankings()
+    {
+        return $this->hasMany(
+            EmployeeSurveyRanking::class,
+            'ranked_employee_id',
+            'employee_id'
+        );
+    }
 }

@@ -9,8 +9,13 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 use App\Models\Employee;
 use App\Models\User;
+use App\Models\Notification;
+use App\Events\NotificationCreated;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\Rule;
 
 class EmployeeController extends Controller
 {
@@ -26,7 +31,7 @@ class EmployeeController extends Controller
             ])
                 ->timeout(5)
                 ->retry(2, 100)
-                ->post(config('services.n8n.url'), $payload);
+                ->post(config('services.n8n.employee_invite.url'), $payload);
 
             Log::info('N8N RESPONSE', [
                 'status' => $response->status(),
@@ -94,6 +99,13 @@ class EmployeeController extends Controller
                 'EmailAddress' => 'required|email|unique:users,email',
                 'FirstName' => 'required|string|max:100',
                 'LastName' => 'required|string|max:100',
+                'Company' => [
+                    'required',
+                    Rule::in([
+                        'Psy Systems and Innovations, OPC',
+                        'Pillars Psychological Services',
+                    ]),
+                ],
             ]);
 
             $employee = Employee::create([
@@ -110,6 +122,8 @@ class EmployeeController extends Controller
                 'EmailAddress' => $request->EmailAddress,
                 'DateHired' => $request->DateHired,
                 'Department' => $request->Department,
+                'Company' => $request->Company,
+
                 'CompanyStatus' => $request->CompanyStatus,
                 'Position' => $request->Position,
                 'JobLevel' => $request->JobLevel,
@@ -133,14 +147,44 @@ class EmployeeController extends Controller
                 'is_temp_password' => true,
             ]);
 
+            /* =========================
+               WELCOME NOTIFICATION
+            ========================= */
+            $notification = Notification::create([
+                'user_id' => $user->id,
+
+                'type' => 'system',
+
+                'title' => 'Welcome to the Employee Portal',
+
+                'message' =>
+                    'Welcome ' . $user->name .
+                    '! Your employee portal account is now ready.',
+
+                'related_type' => 'system',
+
+                'related_id' => $employee->employee_id ?? null,
+
+                'action_url' => '/dashboard/employee/profile',
+            ]);
+
+            event(
+                new NotificationCreated(
+                    $notification
+                )
+            );
+
+            DB::commit();
+
             /* 🔐 SECURED N8N */
             $this->sendToN8n([
                 'email' => $user->email,
+                'employee_name' => $user->name,
                 'employee_no' => $user->employee_no,
                 'temp_password' => $plainPassword,
             ]);
 
-            DB::commit();
+
 
             Log::info('Employee created', [
                 'employee_no' => $employee->EmployeeNo
@@ -164,13 +208,19 @@ class EmployeeController extends Controller
 
         } catch (\Exception $e) {
 
-            DB::rollBack();
+            if (DB::transactionLevel() > 0) {
+                DB::rollBack();
+            }
 
-            Log::error('Employee Create Error: ' . $e->getMessage());
+            Log::error('Employee Create Error', [
+                'message' => $e->getMessage(),
+                'line' => $e->getLine(),
+                'file' => $e->getFile(),
+            ]);
 
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to create employee'
+                'message' => $e->getMessage(),
             ], 500);
         }
     }
@@ -196,6 +246,7 @@ class EmployeeController extends Controller
                 'EmailAddress' => $request->EmailAddress,
                 'ContactNumber' => $request->ContactNumber,
                 'Department' => $request->Department,
+                'Company' => $request->Company,
                 'Position' => $request->Position,
             ]);
 
@@ -324,5 +375,178 @@ class EmployeeController extends Controller
             'success' => true,
             'message' => 'Temporary password sent successfully'
         ]);
+    }
+
+    public function active()
+    {
+        $employees = Employee::query()
+            ->where('Status', 'ACTIVE')
+            ->select([
+                'employee_id', // 🔥 ADD THIS
+                'EmployeeNo',
+                'FirstName',
+                'LastName',
+                'MiddleInitial',
+                'Position',
+                'CompanyStatus',
+                'MonthlySalary'
+            ])
+            ->get()
+            ->map(function ($emp) {
+
+                $fullName = trim(
+                    $emp->LastName . ', ' .
+                    $emp->FirstName . ' ' .
+                    ($emp->MiddleInitial ? $emp->MiddleInitial . '.' : '')
+                );
+
+                return [
+                    'value' => $emp->employee_id, // 🔥 FIXED
+                    'label' => $fullName,
+
+                    // 🔥 IMPORTANT
+                    'employee_id' => $emp->employee_id,
+
+                    // optional display fields
+                    'EmployeeNo' => $emp->EmployeeNo,
+                    'EmployeeName' => $fullName,
+                    'Position' => $emp->Position,
+                    'CompanyStatus' => $emp->CompanyStatus,
+                    'MonthlySalary' => $emp->MonthlySalary,
+                ];
+            });
+
+        return response()->json($employees);
+    }
+
+    public function toggleSurveyEligibility($employeeNo)
+    {
+        try {
+
+            $employee = Employee::where(
+                'EmployeeNo',
+                $employeeNo
+            )->firstOrFail();
+
+            $employee->IsSurveyExcluded =
+                !$employee->IsSurveyExcluded;
+
+            $employee->save();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Survey eligibility updated.',
+                'data' => $employee,
+            ]);
+
+        } catch (\Exception $e) {
+
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 500);
+
+        }
+    }
+
+    public function profile()
+    {
+        try {
+
+            $user = Auth::user();
+
+            $employee = Employee::where(
+                'EmployeeNo',
+                $user->employee_no
+            )->first();
+
+            if (!$employee) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Employee not found'
+                ], 404);
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $employee
+            ]);
+
+        } catch (\Exception $e) {
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch profile'
+            ], 500);
+
+        }
+    }
+
+    public function uploadAvatar(Request $request)
+    {
+        try {
+
+            $request->validate([
+                'avatar' => [
+                    'required',
+                    'image',
+                    'mimes:jpg,jpeg,png,webp',
+                    'max:2048'
+                ]
+            ]);
+
+            $user = Auth::user();
+
+            $employee = Employee::where(
+                'EmployeeNo',
+                $user->employee_no
+            )->firstOrFail();
+
+            /*
+            |--------------------------------------------------------------------------
+            | DELETE OLD IMAGE
+            |--------------------------------------------------------------------------
+            */
+            if (
+                $employee->ProfileImage &&
+                Storage::disk('public')->exists($employee->ProfileImage)
+            ) {
+                Storage::disk('public')->delete(
+                    $employee->ProfileImage
+                );
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | STORE NEW IMAGE
+            |--------------------------------------------------------------------------
+            */
+            $path = $request->file('avatar')->store(
+                'profile-photos',
+                'public'
+            );
+
+            /*
+            |--------------------------------------------------------------------------
+            | SAVE TO DATABASE
+            |--------------------------------------------------------------------------
+            */
+            $employee->ProfileImage = $path;
+
+            $employee->save();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Profile photo uploaded successfully',
+                'photo_url' => asset('storage/' . $path),
+            ]);
+
+        } catch (\Exception $e) {
+
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 500);
+        }
     }
 }

@@ -4,7 +4,11 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Carbon\Carbon;
+
+use App\Models\Employee;
 use App\Models\RequisitionAttachment;
+use App\Models\RequisitionParticular;
+use App\Models\RequisitionLog;
 
 class Requisition extends Model
 {
@@ -29,6 +33,7 @@ class Requisition extends Model
         'ApprovedBy',
         'ApprovedDate',
         'DisapprovalReason',
+        'LiquidatedDate',
     ];
 
     /* =========================
@@ -41,6 +46,7 @@ class Requisition extends Model
         'ReceivedDate' => 'date',
         'CheckedDate' => 'date',
         'ApprovedDate' => 'date',
+        'LiquidatedDate' => 'datetime',
         'TotalAmount' => 'decimal:2',
     ];
 
@@ -59,6 +65,7 @@ class Requisition extends Model
     const STATUS_CHECKED = 'Checked';
     const STATUS_APPROVED = 'Approved';
     const STATUS_REJECTED = 'Rejected';
+    const STATUS_LIQUIDATED = 'Liquidated';
 
     /* =========================
        RELATIONSHIPS
@@ -99,17 +106,28 @@ class Requisition extends Model
             return 0;
         }
 
-        $endDate = Carbon::parse($this->EndDateNeeded);
-        $dueDate = $endDate->copy()->addDays(3);
+        $endDate = Carbon::parse(
+            $this->EndDateNeeded
+        );
 
-        // future: stop counting if liquidated
-        // if ($this->Status === 'Liquidated') return 0;
+        // BUSINESS DAYS ONLY
+        $dueDate = $endDate
+            ->copy()
+            ->addWeekdays(3);
 
-        if (now()->lte($dueDate)) {
+        // 🔥 freeze if liquidated
+        $today = $this->LiquidatedDate
+            ? Carbon::parse(
+                $this->LiquidatedDate
+            )->startOfDay()
+            : now()->startOfDay();
+
+        if ($today->lte($dueDate)) {
             return 0;
         }
 
-        return $dueDate->diffInDays(now());
+        return $dueDate
+            ->diffInWeekdays($today);
     }
 
     /**
@@ -119,6 +137,7 @@ class Requisition extends Model
     {
         if (!$this->EndDateNeeded) {
             return [
+                'completed' => false,
                 'days_passed' => 0,
                 'grace' => 3,
                 'overdue_days' => 0,
@@ -128,10 +147,15 @@ class Requisition extends Model
         }
 
         $end = Carbon::parse($this->EndDateNeeded)->startOfDay();
-        $today = now()->startOfDay();
+        $today = $this->LiquidatedDate
+            ? Carbon::parse($this->LiquidatedDate)->startOfDay()
+            : now()->startOfDay();
 
         // FIXED 🔥
-        $daysPassed = max(0, $end->diffInDays($today));
+        $daysPassed = max(
+            0,
+            $end->diffInWeekdays($today)
+        );
 
         $grace = 3;
         $overdueDays = max(0, $daysPassed - $grace);
@@ -143,12 +167,22 @@ class Requisition extends Model
             $status = 'overdue';
 
         return [
+            'completed' => (bool) $this->has_liquidation,
             'days_passed' => $daysPassed,
             'grace' => $grace,
             'overdue_days' => $overdueDays,
             'status' => $status,
-            'overdue_start' => $end->copy()->addDays($grace + 1), // fixed also
+            'overdue_start' => $end->copy()->addWeekdays($grace + 1), // fixed also
         ];
+    }
+
+    public function employee()
+    {
+        return $this->belongsTo(
+            Employee::class,
+            'EmployeeNo',
+            'EmployeeNo'
+        );
     }
 
     public function attachments()
