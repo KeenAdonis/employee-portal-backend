@@ -22,6 +22,8 @@ use App\Http\Controllers\Api\AdminAccountingDashboardController;
 use App\Http\Controllers\Api\AdminAccountingReportsController;
 use App\Http\Controllers\Api\TravelRequestController;
 use App\Http\Controllers\Api\TravelLiquidationController;
+use App\Http\Controllers\Api\DailyTimeRecordController;
+use App\Http\Controllers\Api\SuperAdmin\SuperAdminUserController;
 
 
 
@@ -29,7 +31,7 @@ use App\Http\Controllers\Api\TravelLiquidationController;
 /* =========================
    AUTH
 ========================= */
-Route::post('/login', [AuthController::class, 'login']);
+Route::middleware('throttle:login')->post('/login', [AuthController::class, 'login']);
 
 /* =========================
    PUBLIC (READ ONLY)
@@ -38,11 +40,9 @@ Route::post('/login', [AuthController::class, 'login']);
 Route::post('/payroll', [PayrollController::class, 'store']);
 Route::get('/employees', [EmployeeController::class, 'index']);
 Route::get('/payroll/export', [PayrollController::class, 'export']);
+Route::get('/employees/template', [EmployeeController::class, 'downloadTemplate']);
 
-Route::get(
-   '/employee/requisitions/available-liquidation',
-   [RequisitionController::class, 'availableLiquidation']
-);
+
 
 Broadcast::routes([
    'middleware' => ['auth:sanctum'],
@@ -56,86 +56,88 @@ Broadcast::routes([
 
 
 
-   Route::middleware('auth:sanctum')->group(function () {
+Route::middleware('auth:sanctum')->group(function () {
 
-    /*
-    |--------------------------------------------------------------------------
-    | TRAVEL REQUESTS
-    |--------------------------------------------------------------------------
-    */
-    Route::prefix('travel')->group(function () {
+   /*
+   |--------------------------------------------------------------------------
+   | TRAVEL REQUESTS
+   |--------------------------------------------------------------------------
+   */
+   Route::prefix('travel')->group(function () {
 
-        Route::get(
-            '/requests',
-            [TravelRequestController::class, 'index']
-        );
+      Route::get(
+         '/requests',
+         [TravelRequestController::class, 'index']
+      );
 
-        Route::post(
-            '/requests',
-            [TravelRequestController::class, 'store']
-        );
+      Route::post(
+         '/requests',
+         [TravelRequestController::class, 'store']
+      );
 
-        Route::get(
-            '/requests/{id}',
-            [TravelRequestController::class, 'show']
-        );
+      Route::get(
+         '/requests/{id}',
+         [TravelRequestController::class, 'show']
+      );
 
-        Route::post(
-            '/requests/approve',
-            [TravelRequestController::class, 'approve']
-        );
+      Route::post(
+         '/requests/approve',
+         [TravelRequestController::class, 'approve']
+      );
 
-        Route::post(
-            '/requests/reject',
-            [TravelRequestController::class, 'reject']
-        );
+      Route::post(
+         '/requests/reject',
+         [TravelRequestController::class, 'reject']
+      );
 
-        Route::patch(
-            '/requests/{id}/complete',
-            [TravelRequestController::class, 'complete']
-        );
+      Route::patch(
+         '/requests/{id}/complete',
+         [TravelRequestController::class, 'complete']
+      );
 
-        Route::patch(
-            '/requests/{id}/cancel',
-            [TravelRequestController::class, 'cancel']
-        );
+      Route::patch(
+         '/requests/{id}/cancel',
+         [TravelRequestController::class, 'cancel']
+      );
 
-        /*
-        |--------------------------------------------------------------------------
-        | LIQUIDATIONS
-        |--------------------------------------------------------------------------
-        */
-        Route::get(
-            '/liquidations',
-            [TravelLiquidationController::class, 'index']
-        );
 
-        Route::post(
-            '/liquidations',
-            [TravelLiquidationController::class, 'store']
-        );
 
-        Route::get(
-            '/liquidations/{id}',
-            [TravelLiquidationController::class, 'show']
-        );
+      /*
+      |--------------------------------------------------------------------------
+      | LIQUIDATIONS
+      |--------------------------------------------------------------------------
+      */
+      Route::get(
+         '/liquidations',
+         [TravelLiquidationController::class, 'index']
+      );
 
-        Route::put(
-            '/liquidations',
-            [TravelLiquidationController::class, 'update']
-        );
+      Route::post(
+         '/liquidations',
+         [TravelLiquidationController::class, 'store']
+      );
 
-        Route::patch(
-            '/liquidations/{id}/approve',
-            [TravelLiquidationController::class, 'approve']
-        );
+      Route::get(
+         '/liquidations/{id}',
+         [TravelLiquidationController::class, 'show']
+      );
 
-        Route::patch(
-            '/liquidations/{id}/reject',
-            [TravelLiquidationController::class, 'reject']
-        );
+      Route::put(
+         '/liquidations',
+         [TravelLiquidationController::class, 'update']
+      );
 
-    });
+      Route::patch(
+         '/liquidations/{id}/approve',
+         [TravelLiquidationController::class, 'approve']
+      );
+
+      Route::patch(
+         '/liquidations/{id}/reject',
+         [TravelLiquidationController::class, 'reject']
+      );
+
+   });
 
 });
 
@@ -294,7 +296,43 @@ Route::middleware('auth:sanctum')->group(function () {
 
    });
 
+   /* =========================
+   SUPER ADMIN USERS
+========================= */
 
+   Route::prefix('super-admin')->group(function () {
+
+      Route::get(
+         '/users',
+         [SuperAdminUserController::class, 'index']
+      );
+
+      Route::post(
+         '/users',
+         [SuperAdminUserController::class, 'store']
+      );
+
+      Route::put(
+         '/users/{id}',
+         [SuperAdminUserController::class, 'update']
+      );
+
+      Route::delete(
+         '/users/{id}',
+         [SuperAdminUserController::class, 'destroy']
+      );
+
+      Route::patch(
+         '/users/{id}/toggle-status',
+         [SuperAdminUserController::class, 'toggleStatus']
+      );
+
+      Route::post(
+         '/users/{id}/reset-password',
+         [SuperAdminUserController::class, 'resetPassword']
+      );
+
+   });
 
    // existing routes mo...
    Route::post('/employees', [EmployeeController::class, 'store']);
@@ -305,6 +343,8 @@ Route::middleware('auth:sanctum')->group(function () {
    Route::post('/employees/{employeeNo}/send-password', [EmployeeController::class, 'sendPassword']);
    Route::put('/employees/{employeeNo}/toggle-survey-eligibility', [EmployeeController::class, 'toggleSurveyEligibility']);
 
+   Route::get('/employee/requisitions/available-liquidation', [RequisitionController::class, 'availableLiquidation']);
+
    Route::post('/overtime', [OvertimeController::class, 'store']);
    Route::post('/overtime/{id}/accomplishments', [OvertimeController::class, 'saveAccomplishments']);
    Route::get('/overtime', [OvertimeController::class, 'index']);
@@ -312,6 +352,39 @@ Route::middleware('auth:sanctum')->group(function () {
    Route::post('/overtime/{id}/approve', [OvertimeController::class, 'approve']);
    Route::post('/overtime/{id}/reject', [OvertimeController::class, 'reject']);
 
+   /* =========================
+   DTR
+========================= */
+
+   Route::post(
+      '/dtr',
+      [DailyTimeRecordController::class, 'store']
+   );
+
+   Route::get(
+      '/dtr',
+      [DailyTimeRecordController::class, 'index']
+   );
+
+   Route::put(
+      '/dtr/{id}',
+      [DailyTimeRecordController::class, 'update']
+   );
+
+   Route::put(
+      '/dtr/{id}/approve',
+      [DailyTimeRecordController::class, 'approve']
+   );
+
+   Route::put(
+      '/dtr/{id}/reject',
+      [DailyTimeRecordController::class, 'reject']
+   );
+
+   Route::get(
+      '/dtr/export',
+      [DailyTimeRecordController::class, 'export']
+   );
 
    Route::post('/leave', [LeaveController::class, 'store']);
    Route::get('/leave', [LeaveController::class, 'index']);
@@ -326,15 +399,19 @@ Route::middleware('auth:sanctum')->group(function () {
    Route::get('/payroll', [PayrollController::class, 'index']);
    Route::post('/payroll', [PayrollController::class, 'store']);
    Route::post('/payroll/preview', [PayrollController::class, 'preview']);
+   Route::get('/payroll/{id}/payslip', [PayrollController::class, 'downloadPayslip']);
    Route::get('/employees/active', [EmployeeController::class, 'active']);
+   Route::get('/employees/export', [EmployeeController::class, 'export']);
+   Route::post('/employees/import', [EmployeeController::class, 'import']);
+
 
    Route::prefix('liquidations')->middleware('auth:sanctum')->group(function () {
 
+      Route::get('/export', [LiquidationController::class, 'export']);
       Route::get('/', [LiquidationController::class, 'index']);
-      Route::get('/{id}', [LiquidationController::class, 'show']);
       Route::post('/', [LiquidationController::class, 'store']);
+      Route::get('/{id}', [LiquidationController::class, 'show']);
       Route::put('/{id}/status', [LiquidationController::class, 'updateStatus']);
-
    });
 
    Route::apiResource('loans', LoanController::class);
@@ -344,6 +421,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
    Route::post('/requisition/{id}/attachments', [RequisitionController::class, 'uploadAttachments']);
    Route::delete('/requisition/attachments/{id}', [RequisitionController::class, 'deleteAttachment']);
+   Route::get('/requisition/export', [RequisitionController::class, 'export']);
 
    /* =========================
       SECURE DOCUMENTS (FIXED)
@@ -355,6 +433,7 @@ Route::middleware('auth:sanctum')->group(function () {
       Route::post('/bulk-send', [SecureDocumentController::class, 'bulkSend']);
       Route::post('/send/{id}', [SecureDocumentController::class, 'sendSingle']);
       Route::post('/{id}/resend', [SecureDocumentController::class, 'resend']);
+      Route::post('/grouped-send/{id}', [SecureDocumentController::class, 'sendGrouped']);
    });
 
    Route::get('/logs', [\App\Http\Controllers\Api\LogController::class, 'index']);

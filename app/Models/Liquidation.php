@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use App\Models\Requisition;
 
 class Liquidation extends Model
 {
@@ -46,7 +47,7 @@ class Liquidation extends Model
     public function requisition()
     {
         return $this->belongsTo(
-            \App\Models\Requisition::class,
+            Requisition::class,
             'request_id',
             'RequestId'
         );

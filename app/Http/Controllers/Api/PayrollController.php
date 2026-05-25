@@ -15,6 +15,9 @@ use App\Events\NotificationCreated;
 use App\Models\User;
 use App\Services\LoanDeductionService;
 
+use PhpOffice\PhpWord\TemplateProcessor;
+use Illuminate\Support\Facades\Storage;
+
 use App\Exports\PayrollExport;
 use Maatwebsite\Excel\Facades\Excel;
 use Carbon\Carbon;
@@ -70,6 +73,8 @@ class PayrollController extends Controller
 
             // ✅ SAVE MAIN PAYROLL
             $payroll = Payroll::create([
+                'status' => 'Completed',
+
                 'is_locked' => 1,
                 'employee_id' => $request->employee_id,
                 'EmployeeNo' => $request->EmployeeNo,
@@ -206,28 +211,14 @@ class PayrollController extends Controller
         }
 
         /* =========================
-           📊 STATUS FILTER
+           📅 PAY DATE FILTER
         ========================= */
-        if (
-            $request->filled('status') &&
-            $request->status !== 'all'
-        ) {
+        if ($request->filled('date_from')) {
 
-            $query->where('status', $request->status);
-        }
-
-        /* =========================
-           📅 DATE RANGE FILTER
-        ========================= */
-        if (
-            $request->filled('date_from') &&
-            $request->filled('date_to')
-        ) {
-
-            $query->whereBetween('PayDate', [
-                $request->date_from,
-                $request->date_to
-            ]);
+            $query->whereDate(
+                'PayDate',
+                $request->date_from
+            );
         }
 
         /* =========================
@@ -238,7 +229,7 @@ class PayrollController extends Controller
                 'items',
                 'employee',
             ])
-            ->latest()
+            ->orderByDesc('PayDate')
             ->paginate($request->per_page ?? 10);
 
         return response()->json([
@@ -322,7 +313,264 @@ class PayrollController extends Controller
         PayrollItem::insert($items);
     }
 
+    public function downloadPayslip($id)
+    {
+        $payroll = Payroll::with('items')
+            ->findOrFail($id);
 
+        $templatePath = storage_path(
+            'app/templates/payslip-template.docx'
+        );
+
+        $template = new TemplateProcessor($templatePath);
+
+        /* =========================
+           BASIC INFO
+        ========================= */
+
+        $template->setValue(
+            'employee_name',
+            $payroll->EmployeeName
+        );
+
+        $template->setValue(
+            'employee_no',
+            $payroll->EmployeeNo
+        );
+
+        $template->setValue(
+            'pay_date',
+            Carbon::parse($payroll->PayDate)
+                ->format('F d, Y')
+        );
+
+        $template->setValue(
+            'position',
+            $payroll->Position
+        );
+
+        /* =========================
+           EARNINGS
+        ========================= */
+
+        $template->setValue(
+            'basic_salary',
+            number_format(
+                $payroll->BiMonthlySalary,
+                2
+            )
+        );
+
+        $template->setValue(
+            'ot_pd',
+            number_format(
+                $payroll->TotalOvertime +
+                $payroll->TotalPerDay,
+                2
+            )
+        );
+
+        $template->setValue(
+            'deminimis',
+            number_format(
+                $payroll->TotalDeMinimis,
+                2
+            )
+        );
+
+        /* =========================
+           GOVERNMENT
+        ========================= */
+
+        $template->setValue(
+            'sss',
+            number_format($payroll->SSS, 2)
+        );
+
+        $template->setValue(
+            'philhealth',
+            number_format($payroll->PhilHealth, 2)
+        );
+
+        $template->setValue(
+            'pagibig',
+            number_format($payroll->Pagibig, 2)
+        );
+
+        $template->setValue(
+            'sss_wisp',
+            number_format($payroll->SSSWisp, 2)
+        );
+
+        $template->setValue(
+            'hmo',
+            number_format($payroll->HMO, 2)
+        );
+
+        /* =========================
+           DEFAULT VALUES
+        ========================= */
+
+        $fields = [
+            'absences',
+            'tardiness',
+            'undertime',
+            'salary_loan',
+            'laptop_loan',
+            'deduction',
+            'sss_pl',
+            'sss_cl',
+            'pagibig_pl',
+            'pagibig_cl',
+        ];
+
+        foreach ($fields as $field) {
+            $template->setValue($field, '0.00');
+        }
+
+        /* =========================
+           PAYROLL ITEMS
+        ========================= */
+
+        foreach ($payroll->items as $item) {
+
+            switch ($item->label) {
+
+                case 'Absences':
+                    $template->setValue(
+                        'absences',
+                        number_format($item->amount, 2)
+                    );
+                    break;
+
+                case 'Tardiness':
+                    $template->setValue(
+                        'tardiness',
+                        number_format($item->amount, 2)
+                    );
+                    break;
+
+                case 'Undertime':
+                    $template->setValue(
+                        'undertime',
+                        number_format($item->amount, 2)
+                    );
+                    break;
+
+                case 'Salary Loan':
+                    $template->setValue(
+                        'salary_loan',
+                        number_format($item->amount, 2)
+                    );
+                    break;
+
+                case 'Laptop Loan':
+                    $template->setValue(
+                        'laptop_loan',
+                        number_format($item->amount, 2)
+                    );
+                    break;
+            }
+        }
+
+        /* =========================
+           TOTALS
+        ========================= */
+
+        $template->setValue(
+            'gross_pay',
+            number_format($payroll->Gross, 2)
+        );
+
+        $template->setValue(
+            'total_deductions',
+            number_format(
+                $payroll->TotalDeduction,
+                2
+            )
+        );
+
+        $template->setValue(
+            'net_pay',
+            number_format($payroll->NetPay, 2)
+        );
+
+        $template->setValue(
+            'date_generated',
+            now()->format('F d, Y h:i A')
+        );
+
+        /* =========================
+           SAVE DOCX
+        ========================= */
+
+        $filename =
+            'Payslip_' .
+            $payroll->EmployeeNo;
+
+        $tempDocxPath = storage_path(
+            'app/temp/' . $filename . '.docx'
+        );
+
+        $template->saveAs($tempDocxPath);
+
+        /* =========================
+           CONVERT TO PDF
+        ========================= */
+
+        $libreOffice = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN'
+            ? '"C:\\Program Files\\LibreOffice\\program\\soffice.exe"'
+            : 'libreoffice';
+
+        $command =
+            $libreOffice .
+            ' --headless --convert-to pdf ' .
+            '--outdir ' .
+            escapeshellarg(storage_path('app/temp')) .
+            ' ' .
+            escapeshellarg($tempDocxPath);
+
+        $output = [];
+
+        $returnCode = 0;
+
+        exec($command, $output, $returnCode);
+
+        if ($returnCode !== 0) {
+
+            return response()->json([
+                'success' => false,
+                'message' => 'PDF conversion failed',
+                'command' => $command,
+                'output' => $output,
+                'return_code' => $returnCode,
+            ], 500);
+        }
+
+        /* =========================
+           PDF PATH
+        ========================= */
+
+        $pdfPath = storage_path(
+            'app/temp/' . $filename . '.pdf'
+        );
+
+        /* =========================
+           DELETE DOCX TEMP
+        ========================= */
+
+        if (file_exists($tempDocxPath)) {
+            unlink($tempDocxPath);
+        }
+
+        /* =========================
+           DOWNLOAD PDF
+        ========================= */
+
+        return response()->download(
+            $pdfPath
+        )->deleteFileAfterSend(true);
+    }
 
 
 

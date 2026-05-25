@@ -116,29 +116,129 @@ class SecureDocumentController extends Controller
     ========================= */
     public function index(Request $request)
     {
-        $query = SecureDocument::with(['recipients', 'batch']);
+        $query = SecureDocument::with([
+            'recipients',
+            'batch'
+        ]);
 
-        if ($request->search) {
-            $query->where(function ($q) use ($request) {
-                $q->where('employee_name', 'like', '%' . $request->search . '%')
-                    ->orWhere('file_name', 'like', '%' . $request->search . '%');
+        /*
+        |--------------------------------------------------------------------------
+        | SEARCH
+        |--------------------------------------------------------------------------
+        */
+
+        if ($request->filled('search')) {
+
+            $search = $request->search;
+
+            $query->where(function ($q) use ($search) {
+
+                $q->where('employee_name', 'like', "%{$search}%")
+                    ->orWhere('file_name', 'like', "%{$search}%")
+                    ->orWhereHas('recipients', function ($r) use ($search) {
+
+                        $r->where('email', 'like', "%{$search}%");
+                    });
             });
         }
 
-        if ($request->status && $request->status !== 'All') {
+        /*
+        |--------------------------------------------------------------------------
+        | STATUS FILTER
+        |--------------------------------------------------------------------------
+        */
+
+        if (
+            $request->filled('status') &&
+            $request->status !== 'All'
+        ) {
+
             $query->where('status', $request->status);
         }
 
-        $documents = $query->latest()->paginate(10);
+        /*
+        |--------------------------------------------------------------------------
+        | FETCH ALL
+        |--------------------------------------------------------------------------
+        */
 
-        $documents->getCollection()->transform(function ($doc) {
-            $doc->recipient_count = $doc->recipients->count();
-            return $doc;
+        $documents = $query
+            ->latest()
+            ->get();
+
+        /*
+        |--------------------------------------------------------------------------
+        | GROUP DOCUMENTS
+        |--------------------------------------------------------------------------
+        */
+
+        $grouped = $documents->groupBy(function ($item) {
+
+            $emails = $item->recipients
+                ->pluck('email')
+                ->sort()
+                ->implode(',');
+
+            return $item->employee_name . '-' . $emails;
         });
+
+        /*
+        |--------------------------------------------------------------------------
+        | FORMAT GROUPS
+        |--------------------------------------------------------------------------
+        */
+
+        $formatted = $grouped->map(function ($items) {
+
+            $first = $items->first();
+
+            return [
+                'id' => $first->id,
+                'employee_name' => $first->employee_name,
+                'status' => $first->status,
+                'created_at' => $first->created_at,
+
+                'ids' => $items->pluck('id')->values(),
+
+                'files' => $items->pluck('file_name')->values(),
+
+                'allEmails' => $items
+                    ->flatMap(function ($doc) {
+                        return $doc->recipients->pluck('email');
+                    })
+                    ->unique()
+                    ->values(),
+            ];
+        })->values();
+
+        /*
+        |--------------------------------------------------------------------------
+        | MANUAL PAGINATION
+        |--------------------------------------------------------------------------
+        */
+
+        $page = max((int) request()->get('page', 1), 1);
+
+        $perPage = 10;
+
+        $currentItems = $formatted
+            ->slice(($page - 1) * $perPage, $perPage)
+            ->values();
+
+        $paginated = new \Illuminate\Pagination\LengthAwarePaginator(
+            $currentItems,
+            $formatted->count(),
+            $perPage,
+            $page,
+            [
+                'path' => request()->url(),
+                'query' => request()->query(),
+            ]
+        );
 
         return response()->json([
             'success' => true,
-            'data' => $documents
+            'data' => $paginated,
         ]);
     }
 
@@ -152,16 +252,20 @@ class SecureDocumentController extends Controller
             'ids.*' => 'exists:secure_documents,id',
         ]);
 
-        $documents = SecureDocument::with('recipients')
+        $documents = SecureDocument::with([
+            'recipients',
+            'batch'
+        ])
             ->whereIn('id', $validated['ids'])
             ->whereIn('status', ['Draft', 'Failed'])
             ->get();
 
-        foreach ($documents as $doc) {
-            dispatch(function () use ($doc) {
-                $this->processAndSend($doc);
-            });
-        }
+        dispatch(function () use ($documents) {
+
+            app(SecureDocumentController::class)
+                ->processBulkRecipientSend($documents);
+
+        });
 
         return response()->json([
             'success' => true,
@@ -174,9 +278,13 @@ class SecureDocumentController extends Controller
     ========================= */
     public function sendSingle($id)
     {
-        $doc = SecureDocument::with('recipients')->findOrFail($id);
+        $doc = SecureDocument::with([
+            'recipients',
+            'batch'
+        ])->findOrFail($id);
 
         if (!in_array($doc->status, ['Draft', 'Failed'])) {
+
             return response()->json([
                 'success' => false,
                 'message' => 'Document cannot be sent'
@@ -184,12 +292,60 @@ class SecureDocumentController extends Controller
         }
 
         dispatch(function () use ($doc) {
-            $this->processAndSend($doc);
+
+            app(SecureDocumentController::class)
+                ->processAndSend($doc);
+
         });
 
         return response()->json([
             'success' => true,
             'message' => 'Email queued'
+        ]);
+    }
+
+    /* =========================
+   GROUPED SEND
+========================= */
+    public function sendGrouped($id)
+    {
+        $doc = SecureDocument::with([
+            'recipients',
+            'batch'
+        ])->findOrFail($id);
+
+        /*
+        |--------------------------------------------------------------------------
+        | GET ALL DOCUMENTS FROM SAME BATCH
+        |--------------------------------------------------------------------------
+        */
+
+        $documents = SecureDocument::with([
+            'recipients',
+            'batch'
+        ])
+            ->where('batch_id', $doc->batch_id)
+            ->whereIn('status', ['Draft', 'Failed'])
+            ->get();
+
+        if ($documents->isEmpty()) {
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Documents cannot be sent'
+            ], 400);
+        }
+
+        dispatch(function () use ($documents) {
+
+            app(SecureDocumentController::class)
+                ->processBulkRecipientSend($documents);
+
+        });
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Grouped email queued'
         ]);
     }
 
@@ -224,16 +380,26 @@ class SecureDocumentController extends Controller
 
             $encryptedPath = $encryptedDir . '/' . Str::uuid() . '.pdf';
 
-            $qpdf = '"C:\\Program Files\\qpdf 12.3.2\\bin\\qpdf.exe"';
+            $qpdf = env('QPDF_PATH', 'qpdf');
+
+            if (
+                strtoupper(substr(PHP_OS, 0, 3)) === 'WIN'
+            ) {
+
+                $qpdf = '"' . $qpdf . '"';
+            }
 
             $command = sprintf(
-                '%s --encrypt %s %s 256 -- "%s" "%s"',
+                '%s --encrypt %s %s 256 -- %s %s',
                 $qpdf,
                 escapeshellarg($password),
                 escapeshellarg($password),
-                $originalPath,
-                $encryptedPath
+                escapeshellarg($originalPath),
+                escapeshellarg($encryptedPath)
             );
+
+            $output = [];
+            $resultCode = null;
 
             exec($command . ' 2>&1', $output, $resultCode);
 
@@ -296,14 +462,274 @@ class SecureDocumentController extends Controller
         }
     }
 
+    private function processBulkRecipientSend($documents)
+    {
+        try {
+
+            $recipientGroups = [];
+
+            foreach ($documents as $doc) {
+
+                $doc->loadMissing([
+                    'recipients',
+                    'batch'
+                ]);
+
+                $doc->markAsQueued();
+
+                $this->logAction(
+                    $doc,
+                    'Send',
+                    'Processing',
+                    'Processing started'
+                );
+
+                $originalPath = storage_path(
+                    'app/public/' . $doc->file_path
+                );
+
+                if (!file_exists($originalPath)) {
+
+                    throw new \Exception(
+                        "File not found: {$doc->file_name}"
+                    );
+                }
+
+                $password = $this->decryptPassword($doc);
+
+                if (!$password) {
+
+                    throw new \Exception(
+                        "Invalid password for {$doc->file_name}"
+                    );
+                }
+
+                $encryptedDir = storage_path(
+                    'app/public/secure_documents/encrypted'
+                );
+
+                if (!file_exists($encryptedDir)) {
+
+                    mkdir($encryptedDir, 0777, true);
+                }
+
+                $encryptedPath =
+                    $encryptedDir . '/' . Str::uuid() . '.pdf';
+
+                $qpdf = env('QPDF_PATH', 'qpdf');
+
+                if (
+                    strtoupper(substr(PHP_OS, 0, 3)) === 'WIN'
+                ) {
+
+                    $qpdf = '"' . $qpdf . '"';
+                }
+
+                $command = sprintf(
+                    '%s --encrypt %s %s 256 -- %s %s',
+                    $qpdf,
+                    escapeshellarg($password),
+                    escapeshellarg($password),
+                    escapeshellarg($originalPath),
+                    escapeshellarg($encryptedPath)
+                );
+
+                exec($command . ' 2>&1', $output, $resultCode);
+
+                clearstatcache();
+
+                usleep(300000);
+
+                if (
+                    $resultCode !== 0 ||
+                    !is_file($encryptedPath) ||
+                    filesize($encryptedPath) === 0
+                ) {
+
+                    throw new \Exception(
+                        "PDF encryption failed for {$doc->file_name}: " .
+                        implode("\n", $output)
+                    );
+                }
+
+                foreach ($doc->recipients as $recipient) {
+
+                    $recipientGroups[$recipient->email][] = [
+                        'path' => $encryptedPath,
+                        'file_name' => $doc->file_name,
+                        'document_id' => $doc->id,
+                        'recipient_id' => $recipient->id,
+                        'password' => $password,
+                    ];
+                }
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | SEND ONE EMAIL PER RECIPIENT
+            |--------------------------------------------------------------------------
+            */
+
+            foreach ($recipientGroups as $email => $files) {
+
+                try {
+
+                    $password = $files[0]['password'];
+
+                    Mail::to($email)->send(
+                        new \App\Mail\BulkSecureDocumentMail(
+                            $files,
+                            $password
+                        )
+                    );
+
+                    foreach ($files as $file) {
+
+                        $recipient =
+                            \App\Models\SecureDocumentRecipient::find(
+                                $file['recipient_id']
+                            );
+
+                        if ($recipient) {
+
+                            $recipient->markAsSent();
+                        }
+
+                        $doc = SecureDocument::find(
+                            $file['document_id']
+                        );
+
+                        if ($doc) {
+
+                            $this->logAction(
+                                (object) [
+                                    'id' => $doc->id,
+                                    'email' => $email,
+                                    'employee_name' => $doc->employee_name,
+                                    'file_name' => $doc->file_name,
+                                ],
+                                'Send',
+                                'Success',
+                                'Bulk email sent successfully'
+                            );
+                        }
+                    }
+
+                } catch (\Throwable $e) {
+
+                    foreach ($files as $file) {
+
+                        $recipient =
+                            \App\Models\SecureDocumentRecipient::find(
+                                $file['recipient_id']
+                            );
+
+                        if ($recipient) {
+
+                            $recipient->markAsFailed(
+                                $e->getMessage()
+                            );
+                        }
+
+                        $doc = SecureDocument::find(
+                            $file['document_id']
+                        );
+
+                        if ($doc) {
+
+                            $doc->markAsFailed(
+                                $e->getMessage()
+                            );
+
+                            $this->logAction(
+                                (object) [
+                                    'id' => $doc->id,
+                                    'email' => $email,
+                                    'employee_name' => $doc->employee_name,
+                                    'file_name' => $doc->file_name,
+                                ],
+                                'Send',
+                                'Failed',
+                                $e->getMessage()
+                            );
+                        }
+                    }
+
+                    Log::error('Bulk Email Send Error', [
+                        'email' => $email,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | UPDATE FINAL STATUS
+            |--------------------------------------------------------------------------
+            */
+
+            foreach ($documents as $doc) {
+
+                $hasFailed =
+                    $doc->recipients()
+                        ->where('status', 'Failed')
+                        ->exists();
+
+                $allSent =
+                    $doc->recipients()
+                        ->where('status', '!=', 'Sent')
+                        ->doesntExist();
+
+                if ($hasFailed) {
+
+                    $doc->status = 'Failed';
+
+                } elseif ($allSent) {
+
+                    $doc->status = 'Sent';
+
+                } else {
+
+                    $doc->status = 'Processing';
+                }
+
+                $doc->save();
+            }
+
+        } catch (\Throwable $e) {
+
+            Log::error('Bulk Process Error', [
+                'error' => $e->getMessage(),
+            ]);
+
+            foreach ($documents as $doc) {
+
+                $doc->markAsFailed(
+                    $e->getMessage()
+                );
+
+                $this->logAction(
+                    $doc,
+                    'Send',
+                    'Failed',
+                    $e->getMessage()
+                );
+            }
+        }
+    }
+
     /* =========================
        RESEND
     ========================= */
     public function resend($id)
     {
-        $doc = SecureDocument::findOrFail($id);
+        $doc = SecureDocument::with([
+            'recipients',
+            'batch'
+        ])->findOrFail($id);
 
         try {
+
             $doc->update([
                 'status' => 'Queued',
                 'error_message' => null,
@@ -311,11 +737,18 @@ class SecureDocumentController extends Controller
 
             $doc->increment('resend_count');
 
-            // 🟡 RESEND LOG
-            $this->logAction($doc, 'Resend', 'Processing', 'Resend queued');
+            $this->logAction(
+                $doc,
+                'Resend',
+                'Processing',
+                'Resend queued'
+            );
 
             dispatch(function () use ($doc) {
-                app(SecureDocumentController::class)->processAndSend($doc);
+
+                app(SecureDocumentController::class)
+                    ->processAndSend($doc);
+
             });
 
             return response()->json([
@@ -324,7 +757,12 @@ class SecureDocumentController extends Controller
 
         } catch (\Exception $e) {
 
-            $this->logAction($doc, 'Resend', 'Failed', $e->getMessage());
+            $this->logAction(
+                $doc,
+                'Resend',
+                'Failed',
+                $e->getMessage()
+            );
 
             return response()->json([
                 'message' => 'Resend failed',
@@ -372,11 +810,18 @@ class SecureDocumentController extends Controller
     ========================= */
     private function decryptPassword(SecureDocument $doc)
     {
-        if (!$doc->password_encrypted) {
+        $doc->loadMissing('batch');
+
+        if (
+            !$doc->batch ||
+            !$doc->batch->password_encrypted
+        ) {
             return null;
         }
 
-        return Crypt::decryptString($doc->password_encrypted);
+        return Crypt::decryptString(
+            $doc->batch->password_encrypted
+        );
     }
 }
 

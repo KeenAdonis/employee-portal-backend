@@ -3,18 +3,27 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+
 use Illuminate\Http\Request;
+
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Auth;
+
 use App\Models\Requisition;
 use App\Models\RequisitionLog;
 use App\Models\RequisitionAttachment;
 use App\Models\RequisitionParticular;
-use Illuminate\Support\Facades\Auth;
 use App\Models\Employee;
 use App\Models\User;
 use App\Models\Notification;
+
 use App\Events\NotificationCreated;
+
+use App\Exports\RequisitionExport;
+
+use Maatwebsite\Excel\Facades\Excel;
+
 use Carbon\Carbon;
 
 class RequisitionController extends Controller
@@ -47,14 +56,19 @@ class RequisitionController extends Controller
             $query->where('EmployeeNo', $user->employee_no);
         }
 
-        // adminhr / adminaccounting → full access (no filter)
-
         /* =========================
            📊 STATUS FILTER
         ========================= */
         if ($request->filled('status')) {
             $statuses = explode(',', $request->status);
             $query->whereIn('Status', $statuses);
+        }
+
+        /* =========================
+           🏷️ TYPE FILTER
+        ========================= */
+        if ($request->filled('type') && $request->type !== 'all') {
+            $query->where('Type', $request->type);
         }
 
         /* =========================
@@ -472,6 +486,54 @@ class RequisitionController extends Controller
                         );
                     }
 
+                } elseif ($validated['status'] === Requisition::STATUS_APPROVED) {
+
+                    $req->update([
+                        'Status' => Requisition::STATUS_APPROVED,
+                        'ApprovedBy' => $user->name,
+                        'ApprovedDate' => now(),
+
+                        // optional
+                        'CheckedBy' => $user->name,
+                        'CheckedDate' => now(),
+                    ]);
+
+                    $this->log($req, 'Approved', $user);
+
+                    /* =========================
+                       NOTIFY EMPLOYEE
+                    ========================= */
+                    $employeeUser = User::query()
+                        ->where('employee_no', $req->EmployeeNo)
+                        ->first();
+
+                    if ($employeeUser) {
+
+                        $notification = Notification::create([
+                            'user_id' => $employeeUser->id,
+
+                            'type' => 'requisition',
+
+                            'title' => 'Requisition Approved',
+
+                            'message' =>
+                                'Accounting approved your requisition request.',
+
+                            'related_type' => 'requisition',
+
+                            'related_id' => $req->id,
+
+                            'action_url' => '/dashboard/employee/requisition',
+                        ]);
+
+                        event(
+                            new NotificationCreated(
+                                $notification
+                            )
+                        );
+                    }
+
+
                 } elseif ($validated['status'] === Requisition::STATUS_REJECTED) {
 
                     $req->update([
@@ -751,6 +813,95 @@ class RequisitionController extends Controller
             'success' => true,
             'message' => 'Attachment deleted successfully'
         ]);
+    }
+
+    public function export(Request $request)
+    {
+        $query = Requisition::query();
+
+        /* =========================
+           STATUS
+        ========================= */
+        if ($request->filled('status')) {
+
+            $statuses = explode(
+                ',',
+                $request->status
+            );
+
+            $query->whereIn(
+                'Status',
+                $statuses
+            );
+        }
+
+        /* =========================
+           SEARCH
+        ========================= */
+        if ($request->filled('search')) {
+
+            $search = $request->search;
+
+            $query->where(function ($q) use ($search) {
+
+                $q->where(
+                    'EmployeeName',
+                    'like',
+                    "%{$search}%"
+                )
+
+                    ->orWhere(
+                        'Type',
+                        'like',
+                        "%{$search}%"
+                    )
+
+                    ->orWhere(
+                        'RequestId',
+                        'like',
+                        "%{$search}%"
+                    );
+            });
+        }
+
+        /* =========================
+           TYPE
+        ========================= */
+        if (
+            $request->filled('type') &&
+            $request->type !== 'all'
+        ) {
+
+            $query->where(
+                'Type',
+                $request->type
+            );
+        }
+
+        /* =========================
+           DATE RANGE
+        ========================= */
+        if (
+            $request->filled('from') &&
+            $request->filled('to')
+        ) {
+
+            $query->whereBetween(
+                'DateFiled',
+                [
+                    Carbon::parse($request->from)
+                        ->startOfDay(),
+
+                    Carbon::parse($request->to)
+                        ->endOfDay(),
+                ]
+            );
+        }
+
+        return Excel::download(
+            new RequisitionExport($query),
+            'requisition-report.xlsx'
+        );
     }
 
     /* =========================

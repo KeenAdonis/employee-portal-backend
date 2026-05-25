@@ -17,12 +17,15 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 
+use App\Imports\EmployeeImport;
+use Maatwebsite\Excel\Facades\Excel;
+
 class EmployeeController extends Controller
 {
     /* =========================
        🔐 HELPER: N8N WEBHOOK
     ========================= */
-    private function sendToN8n($payload)
+    public function sendToN8n($payload)
     {
         try {
             $response = Http::withHeaders([
@@ -273,6 +276,34 @@ class EmployeeController extends Controller
         }
     }
 
+    public function import(Request $request)
+    {
+        try {
+
+            $request->validate([
+                'file' => 'required|file',
+            ]);
+
+            Excel::import(
+                new EmployeeImport,
+                $request->file('file')
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Employees imported successfully',
+            ]);
+
+        } catch (\Exception $e) {
+
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 500);
+
+        }
+    }
+
     /* =========================
        EXPORT CSV (SAFE)
     ========================= */
@@ -289,9 +320,23 @@ class EmployeeController extends Controller
             fputcsv($file, [
                 'Employee No',
                 'First Name',
+                'Middle Initial',
                 'Last Name',
                 'Email',
+                'Contact Number',
                 'Department',
+                'Position',
+                'Company',
+                'Company Status',
+                'Job Level',
+                'Monthly Salary',
+                'Gender',
+                'Civil Status',
+                'Birthday',
+                'SSS',
+                'PhilHealth',
+                'Pag-IBIG',
+                'TIN',
                 'Status',
                 'Date Hired'
             ]);
@@ -306,9 +351,23 @@ class EmployeeController extends Controller
                         fputcsv($file, [
                             $emp->EmployeeNo,
                             $emp->FirstName,
+                            $emp->MiddleInitial,
                             $emp->LastName,
                             $emp->EmailAddress,
+                            $emp->ContactNumber,
                             $emp->Department,
+                            $emp->Position,
+                            $emp->Company,
+                            $emp->CompanyStatus,
+                            $emp->JobLevel,
+                            $emp->MonthlySalary,
+                            $emp->Gender,
+                            $emp->CivilStatus,
+                            $emp->Birthday,
+                            $emp->SSSNumber,
+                            $emp->PhilHealthNumber,
+                            $emp->PagIbigNumber,
+                            $emp->TIN,
                             $emp->Status,
                             $emp->DateHired,
                         ]);
@@ -319,6 +378,87 @@ class EmployeeController extends Controller
         };
 
         return response()->stream($callback, 200, $headers);
+    }
+
+    public function downloadTemplate()
+    {
+        $headers = [
+            "Content-Type" => "text/csv",
+            "Content-Disposition" => "attachment; filename=employee_template.csv",
+        ];
+
+        $callback = function () {
+
+            $file = fopen('php://output', 'w');
+
+            /*
+            |--------------------------------------------------------------------------
+            | HEADERS
+            |--------------------------------------------------------------------------
+            */
+            fputcsv($file, [
+                'EmployeeNo',
+                'FirstName',
+                'MiddleInitial',
+                'LastName',
+                'HomeAddress',
+                'Birthday',
+                'Gender',
+                'CivilStatus',
+                'ContactNumber',
+                'EmailAddress',
+                'DateHired',
+                'Department',
+                'Company',
+                'CompanyStatus',
+                'Position',
+                'JobLevel',
+                'MonthlySalary',
+                'SSSNumber',
+                'PhilHealthNumber',
+                'PagIbigNumber',
+                'TIN',
+            ]);
+
+            /*
+            |--------------------------------------------------------------------------
+            | SAMPLE ROW
+            |--------------------------------------------------------------------------
+            */
+            fputcsv($file, [
+                'EMP-001',
+                'Juan',
+                'D',
+                'Cruz',
+                'Quezon City',
+                '1995-01-01',
+                'Male',
+                'Single',
+                '09123456789',
+                'juan@example.com',
+                '2026-05-22',
+                'HR-GSD Department',
+                'Psy Systems and Innovations, OPC',
+                'Regular',
+                'HR Staff',
+                'Staff',
+                '25000',
+                '12-3456789-0',
+                '123456789',
+                '123456789012',
+                '123-456-789',
+            ]);
+
+            fclose($file);
+        };
+
+        return response()->streamDownload(
+            $callback,
+            'employee_template.csv',
+            [
+                'Content-Type' => 'text/csv',
+            ]
+        );
     }
 
     /* =========================

@@ -43,7 +43,10 @@ class LeaveController extends Controller
         /* =========================
            📊 STATUS FILTER
         ========================= */
-        if ($request->filled('status')) {
+        if (
+            $request->filled('status') &&
+            $request->status !== 'all'
+        ) {
 
             $statuses = explode(',', $request->status);
 
@@ -61,7 +64,9 @@ class LeaveController extends Controller
 
                 $q->where('EmployeeName', 'like', "%{$search}%")
                     ->orWhere('RequestId', 'like', "%{$search}%")
-                    ->orWhere('LeaveType', 'like', "%{$search}%");
+                    ->orWhere('LeaveType', 'like', "%{$search}%")
+                    ->orWhere('Reason', 'like', "%{$search}%")
+                    ->orWhere('Status', 'like', "%{$search}%");
             });
         }
 

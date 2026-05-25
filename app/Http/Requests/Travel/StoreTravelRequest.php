@@ -40,7 +40,7 @@ class StoreTravelRequest extends FormRequest
 
             'transportation_type' => [
                 'required',
-                'in:company_vehicle,personal_vehicle,commute,air_travel'
+                'in:Company Vehicle,Personal Vehicle,Commute,Other'
             ],
 
             /*
@@ -49,21 +49,21 @@ class StoreTravelRequest extends FormRequest
             |--------------------------------------------------------------------------
             */
             'plate_number' => [
-                'required_if:transportation_type,personal_vehicle',
+                'required_if:transportation_type,Personal Vehicle',
                 'nullable',
                 'string',
                 'max:50'
             ],
 
             'fuel_consumption' => [
-                'required_if:transportation_type,personal_vehicle',
+                'required_if:transportation_type,Personal Vehicle',
                 'nullable',
                 'numeric',
                 'min:1'
             ],
 
             'fuel_type' => [
-                'required_if:transportation_type,personal_vehicle',
+                'required_if:transportation_type,Personal Vehicle',
                 'nullable',
                 'in:diesel,premium,regular'
             ],

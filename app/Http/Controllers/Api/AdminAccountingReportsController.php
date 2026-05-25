@@ -205,13 +205,9 @@ class AdminAccountingReportsController extends Controller
     {
         try {
 
-            $statuses = [
-
-                Requisition::STATUS_APPROVED,
-
-                Requisition::STATUS_LIQUIDATED,
-
-            ];
+            $requestYear =
+                request()->year
+                ?? now()->year;
 
             $months = collect([
 
@@ -230,31 +226,28 @@ class AdminAccountingReportsController extends Controller
 
             ]);
 
-            $data = $months->map(function (
-                $month,
-                $index
-            ) use ($statuses) {
+            $data = $months->map(function ($month, $index) use ($requestYear) {
 
                 $monthNumber = $index + 1;
 
-                $amount = Requisition::query()
+                $amount = Liquidation::query()
 
-                    ->whereIn(
-                        'Status',
-                        $statuses
+                    ->where(
+                        'status',
+                        'Approved'
                     )
 
                     ->whereMonth(
-                        'ApprovedDate',
+                        'created_at',
                         $monthNumber
                     )
 
                     ->whereYear(
-                        'ApprovedDate',
-                        now()->year
+                        'created_at',
+                        $requestYear
                     )
 
-                    ->sum('TotalAmount');
+                    ->sum('total_expenses');
 
                 return [
 
@@ -265,9 +258,10 @@ class AdminAccountingReportsController extends Controller
                 ];
             });
 
-            return response()->json(
-                $data
-            );
+            return response()->json([
+                'year' => $requestYear,
+                'data' => $data,
+            ]);
 
         } catch (\Exception $error) {
 

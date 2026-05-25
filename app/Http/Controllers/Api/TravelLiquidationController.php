@@ -222,7 +222,7 @@ public function store(
 
             if (
                 $travel->transportation_type
-                === 'personal_vehicle'
+                === 'Personal Vehicle'
             ) {
 
                 $fuelRate = match (
@@ -501,15 +501,15 @@ public function update(
 
             if (
                 $travel->transportation_type
-                === 'personal_vehicle'
+                === 'Personal Vehicle'
             ) {
 
                 $fuelRate = match (
                     $travel->fuel_type
                 ) {
-                    'diesel' => 65,
-                    'premium' => 75,
-                    'regular' => 70,
+                    'Diesel' => 65,
+                    'Premium' => 75,
+                    'Regular' => 70,
                     default => 0
                 };
 

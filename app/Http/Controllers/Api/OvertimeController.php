@@ -56,14 +56,19 @@ class OvertimeController extends Controller
 
                     $q->where('EmployeeName', 'like', "%{$search}%")
                         ->orWhere('EmployeeNo', 'like', "%{$search}%")
-                        ->orWhere('RequestId', 'like', "%{$search}%");
+                        ->orWhere('RequestId', 'like', "%{$search}%")
+                        ->orWhere('OvertimeReason', 'like', "%{$search}%")
+                        ->orWhere('Status', 'like', "%{$search}%");
                 });
             }
 
             /* =========================
                📊 STATUS FILTER
             ========================= */
-            if ($request->filled('status')) {
+            if (
+                $request->filled('status') &&
+                $request->status !== 'all'
+            ) {
 
                 $statuses = explode(',', $request->status);
 

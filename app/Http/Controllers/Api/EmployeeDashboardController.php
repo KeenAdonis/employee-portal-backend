@@ -117,6 +117,53 @@ class EmployeeDashboardController extends Controller
 
             ->count();
 
+
+        /*
+        |--------------------------------------------------------------------------
+        | EMPLOYEES ON LEAVE TODAY
+        |--------------------------------------------------------------------------
+        */
+        $recentLeavesToday = Leave::query()
+
+            ->where(
+                'Status',
+                Leave::STATUS_APPROVED
+            )
+
+            ->whereDate('DateFrom', '<=', today())
+
+            ->whereDate('DateTo', '>=', today())
+
+            ->latest()
+
+            ->take(5)
+
+            ->get();
+
+        /*
+        |--------------------------------------------------------------------------
+        | EMPLOYEES ON OVERTIME TODAY
+        |--------------------------------------------------------------------------
+        */
+        $recentOvertimeToday = Overtime::query()
+
+            ->where(
+                'Status',
+                Overtime::STATUS_APPROVED
+            )
+
+            ->whereDate(
+                'OvertimeDate',
+                today()
+            )
+
+            ->latest()
+
+            ->take(5)
+
+            ->get();
+
+
         /*
         |--------------------------------------------------------------------------
         | RECENT NOTIFICATIONS
@@ -293,6 +340,12 @@ class EmployeeDashboardController extends Controller
 
                 'recent_requests' =>
                     $recentRequests,
+
+                'recent_leaves_today' =>
+                    $recentLeavesToday,
+
+                'recent_overtime_today' =>
+                    $recentOvertimeToday,
             ]
         ]);
     }

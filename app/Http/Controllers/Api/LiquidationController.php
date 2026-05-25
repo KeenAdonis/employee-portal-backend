@@ -14,6 +14,12 @@ use App\Models\Requisition;
 use App\Models\Notification;
 use App\Models\User;
 
+use App\Exports\LiquidationExport;
+
+use Maatwebsite\Excel\Facades\Excel;
+
+use Carbon\Carbon;
+
 use App\Events\NotificationCreated;
 
 class LiquidationController extends Controller
@@ -26,10 +32,13 @@ class LiquidationController extends Controller
         $validator = Validator::make($request->all(), [
             'request_id' => 'required|string',
             'cash_advance' => 'required|numeric|min:0',
+
             'particulars' => 'required|array|min:1',
             'particulars.*.particulars' => 'required|string',
             'particulars.*.amount' => 'required|numeric|min:0',
             'particulars.*.or_no' => 'nullable|string',
+
+            'is_draft' => 'nullable|boolean',
         ]);
 
         if ($validator->fails()) {
@@ -39,15 +48,26 @@ class LiquidationController extends Controller
             ], 422);
         }
 
+        $isDraft = $request->boolean('is_draft');
+
         $existingLiquidation = Liquidation::where(
             'request_id',
             $request->request_id
-        )->latest()->first();
+        )
+            ->where('status', 'Draft')
+            ->first();
 
-        if (
-            $existingLiquidation &&
-            $existingLiquidation->status !== 'Rejected'
-        ) {
+        $activeLiquidation = Liquidation::where(
+            'request_id',
+            $request->request_id
+        )
+            ->whereNotIn('status', [
+                'Rejected',
+                'Draft'
+            ])
+            ->exists();
+
+        if ($activeLiquidation) {
             return response()->json([
                 'message' =>
                     'This request already has an active liquidation.'
@@ -62,15 +82,35 @@ class LiquidationController extends Controller
             DB::beginTransaction();
 
             // 🧾 Create liquidation
-            $liq = Liquidation::create([
-                'request_id' => $request->request_id,
-                'cash_advance' => $request->cash_advance,
-                'total_expenses' => 0,
-                'amount_reimbursement' => 0,
-                'amount_returned' => 0,
-                'status' => 'Pending',
-                'remarks' => $request->remarks ?? null,
-            ]);
+            if ($existingLiquidation) {
+
+                $existingLiquidation->update([
+                    'cash_advance' => $request->cash_advance,
+                    'total_expenses' => 0,
+                    'amount_reimbursement' => 0,
+                    'amount_returned' => 0,
+                    'remarks' => $request->remarks ?? null,
+                    'status' => $isDraft ? 'Draft' : 'Pending',
+                ]);
+
+                $existingLiquidation
+                    ->particulars()
+                    ->delete();
+
+                $liq = $existingLiquidation;
+
+            } else {
+
+                $liq = Liquidation::create([
+                    'request_id' => $request->request_id,
+                    'cash_advance' => $request->cash_advance,
+                    'total_expenses' => 0,
+                    'amount_reimbursement' => 0,
+                    'amount_returned' => 0,
+                    'status' => $isDraft ? 'Draft' : 'Pending',
+                    'remarks' => $request->remarks ?? null,
+                ]);
+            }
 
             // 🧾 Save particulars
             $total = 0;
@@ -106,45 +146,43 @@ class LiquidationController extends Controller
             ]);
 
             // 📝 Log
-            $this->log($liq->id, 'Submitted', auth()->user()->name ?? 'System');
+            $this->log(
+                $liq->id,
+                $isDraft ? 'Draft Saved' : 'Submitted',
+                auth()->user()->name ?? 'System'
+            );
 
             /* =========================
                NOTIFY ACCOUNTING
             ========================= */
-            $financeUsers = User::query()
-                ->where('role', 'adminaccounting')
-                ->get();
+            if (!$isDraft) {
 
-            foreach ($financeUsers as $finance) {
+                $financeUsers = User::query()
+                    ->where('role', 'adminaccounting')
+                    ->get();
 
-                $notification = Notification::create([
-                    'user_id' => $finance->id,
+                foreach ($financeUsers as $finance) {
 
-                    'type' => 'liquidation',
+                    $notification = Notification::create([
+                        'user_id' => $finance->id,
+                        'type' => 'liquidation',
+                        'title' => 'New Liquidation Request',
+                        'message' => 'A liquidation request has been submitted.',
+                        'related_type' => 'liquidation',
+                        'related_id' => $liq->id,
+                        'action_url' => '/dashboard/adminaccounting/finance-liquidation',
+                    ]);
 
-                    'title' => 'New Liquidation Request',
-
-                    'message' =>
-                        'A liquidation request has been submitted.',
-
-                    'related_type' => 'liquidation',
-
-                    'related_id' => $liq->id,
-
-                    'action_url' => '/dashboard/adminaccounting/finance-liquidation',
-                ]);
-
-                event(
-                    new NotificationCreated(
-                        $notification
-                    )
-                );
+                    event(new NotificationCreated($notification));
+                }
             }
 
             DB::commit();
 
             return response()->json([
-                'message' => 'Liquidation submitted successfully',
+                'message' => $isDraft
+                    ? 'Liquidation saved as draft'
+                    : 'Liquidation submitted successfully',
                 'data' => $liq
             ], 201);
 
@@ -208,24 +246,54 @@ class LiquidationController extends Controller
         }
 
         /* =========================
-           📊 STATUS FILTER (OPTIONAL)
+           📌 STATUS FILTER
         ========================= */
-        if ($request->filled('status')) {
-            $statuses = explode(',', $request->status);
-            $query->whereIn('status', $statuses);
+        if (
+            $request->filled('status') &&
+            $request->status !== 'all'
+        ) {
+
+            $query->where(
+                'status',
+                $request->status
+            );
         }
 
         /* =========================
            🔍 SEARCH
         ========================= */
         if ($request->filled('search')) {
+
             $search = $request->search;
 
             $query->where(function ($q) use ($search) {
-                $q->where('request_id', 'like', "%{$search}%")
-                    ->orWhere('remarks', 'like', "%{$search}%");
+
+                $q->where(
+                    'request_id',
+                    'like',
+                    "%{$search}%"
+                )
+
+                    ->orWhere(
+                        'remarks',
+                        'like',
+                        "%{$search}%"
+                    )
+
+                    ->orWhereHas(
+                        'requisition',
+                        function ($rq) use ($search) {
+
+                            $rq->where(
+                                'EmployeeName',
+                                'like',
+                                "%{$search}%"
+                            );
+                        }
+                    );
             });
         }
+
 
         /* =========================
            📄 PAGINATION
@@ -278,7 +346,7 @@ class LiquidationController extends Controller
                     ], 400);
                 }
 
-                if (!in_array($request->status, ['Checked', 'Rejected'])) {
+                if (!in_array($request->status, ['Checked', 'Approved', 'Rejected'])) {
                     return response()->json([
                         'message' => 'Invalid status for Accounting'
                     ], 400);
@@ -309,6 +377,11 @@ class LiquidationController extends Controller
             $this->log($liq->id, $request->status, $user->name);
 
             if ($request->status === 'Approved') {
+
+                $approvedBy =
+                    $user->role === 'adminhr'
+                    ? 'HR'
+                    : 'Accounting';
 
                 /* =========================
                    FINALIZE REQUISITION
@@ -345,7 +418,8 @@ class LiquidationController extends Controller
                         'title' => 'Liquidation Approved',
 
                         'message' =>
-                            'Your liquidation request has been approved.',
+                            'Your liquidation request has been approved by '
+                            . $approvedBy . '.',
 
                         'related_type' => 'liquidation',
 
@@ -378,7 +452,7 @@ class LiquidationController extends Controller
                         'title' => 'Liquidation Approved',
 
                         'message' =>
-                            'HR approved a liquidation request.',
+                            $approvedBy . ' approved a liquidation request.',
 
                         'related_type' => 'liquidation',
 
@@ -588,6 +662,117 @@ class LiquidationController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    public function export(Request $request)
+    {
+        $query = Liquidation::with([
+            'requisition'
+        ]);
+
+        /* =========================
+           🔐 ROLE FILTER
+        ========================= */
+
+        $user = auth()->user();
+
+        if ($user->role === 'employee') {
+
+            $query->whereHas(
+                'requisition',
+                function ($q) use ($user) {
+
+                    $q->where(
+                        'EmployeeNo',
+                        $user->employee_no
+                    );
+                }
+            );
+        }
+
+        /* =========================
+           📌 STATUS FILTER
+        ========================= */
+
+        if (
+            $request->filled('status') &&
+            $request->status !== 'all'
+        ) {
+
+            $statuses = explode(
+                ',',
+                $request->status
+            );
+
+            $query->whereIn(
+                'status',
+                $statuses
+            );
+        }
+
+        /* =========================
+           🔍 SEARCH
+        ========================= */
+
+        if ($request->filled('search')) {
+
+            $search = $request->search;
+
+            $query->where(function ($q) use ($search) {
+
+                $q->where(
+                    'request_id',
+                    'like',
+                    "%{$search}%"
+                )
+
+                    ->orWhere(
+                        'remarks',
+                        'like',
+                        "%{$search}%"
+                    )
+
+                    ->orWhereHas(
+                        'requisition',
+                        function ($rq) use ($search) {
+
+                            $rq->where(
+                                'EmployeeName',
+                                'like',
+                                "%{$search}%"
+                            );
+                        }
+                    );
+            });
+        }
+
+        /* =========================
+           📅 DATE RANGE
+        ========================= */
+
+        if (
+            $request->filled('from') &&
+            $request->filled('to')
+        ) {
+
+            $query->whereBetween(
+                'created_at',
+                [
+                    Carbon::parse(
+                        $request->from
+                    )->startOfDay(),
+
+                    Carbon::parse(
+                        $request->to
+                    )->endOfDay(),
+                ]
+            );
+        }
+
+        return Excel::download(
+            new LiquidationExport($query),
+            'liquidation-report.xlsx'
+        );
     }
 
 

@@ -84,10 +84,18 @@ class TravelRequestController extends Controller
             */
             if ($user->role === 'employee') {
 
-                $query->where(
-                    'employee_id',
-                    $user->employee_id
-                );
+                $employee = Employee::where(
+                    'EmployeeNo',
+                    $user->employee_no
+                )->first();
+
+                if ($employee) {
+
+                    $query->where(
+                        'employee_id',
+                        $employee->employee_id
+                    );
+                }
             }
 
             /*
@@ -472,7 +480,7 @@ class TravelRequestController extends Controller
                 */
                 $travel->update([
 
-                    'status' => 'approved',
+                    'status' => 'Approved',
 
                     'approved_by' =>
                         auth()->user()->employee_id,
@@ -488,7 +496,7 @@ class TravelRequestController extends Controller
                 TravelLog::create([
                     'travel_request_id' => $travel->id,
 
-                    'action' => 'approved',
+                    'action' => 'Approved',
 
                     'description' =>
                         'Travel request approved.',
@@ -558,7 +566,7 @@ class TravelRequestController extends Controller
                 */
                 $travel->update([
 
-                    'status' => 'rejected',
+                    'status' => 'Rejected',
 
                     'rejection_reason' =>
                         $request->rejection_reason,
@@ -577,7 +585,7 @@ class TravelRequestController extends Controller
                 TravelLog::create([
                     'travel_request_id' => $travel->id,
 
-                    'action' => 'rejected',
+                    'action' => 'Rejected',
 
                     'description' =>
                         'Travel request rejected.',
@@ -631,7 +639,7 @@ class TravelRequestController extends Controller
                 | VALIDATE STATUS
                 |--------------------------------------------------------------------------
                 */
-                if ($travel->status !== 'approved') {
+                if ($travel->status !== 'Approved') {
 
                     throw new \Exception(
                         'Only approved travel requests can be completed.'
@@ -644,7 +652,7 @@ class TravelRequestController extends Controller
                 |--------------------------------------------------------------------------
                 */
                 $travel->update([
-                    'status' => 'completed',
+                    'status' => 'Completed',
                 ]);
 
                 /*
@@ -655,7 +663,7 @@ class TravelRequestController extends Controller
                 TravelLog::create([
                     'travel_request_id' => $travel->id,
 
-                    'action' => 'completed',
+                    'action' => 'Completed',
 
                     'description' =>
                         'Travel request marked as completed.',
@@ -689,12 +697,21 @@ class TravelRequestController extends Controller
      * =========================================================================
      */
     public function cancel(
+        Request $request,
         int $id
     ): JsonResponse {
 
         try {
 
-            DB::transaction(function () use ($id) {
+            DB::transaction(function () use ($id, $request) {
+
+                $request->validate([
+                    'cancellation_reason' => [
+                        'required',
+                        'string',
+                        'max:1000',
+                    ],
+                ]);
 
                 /*
                 |--------------------------------------------------------------------------
@@ -712,7 +729,10 @@ class TravelRequestController extends Controller
                 if (
                     !in_array(
                         $travel->status,
-                        ['Pending']
+                        [
+                            'Pending',
+                            'Approved',
+                        ]
                     )
                 ) {
 
@@ -728,15 +748,24 @@ class TravelRequestController extends Controller
                 */
                 $user = auth()->user();
 
-                if (
-                    $user->role === 'employee'
-                    &&
-                    $travel->employee_id !== $user->employee_id
-                ) {
+                if ($user->role === 'employee') {
 
-                    throw new \Exception(
-                        'Unauthorized action.'
-                    );
+                    $employee = Employee::where(
+                        'EmployeeNo',
+                        $user->employee_no
+                    )->first();
+
+                    if (
+                        !$employee
+                        ||
+                        $travel->employee_id !==
+                        $employee->employee_id
+                    ) {
+
+                        throw new \Exception(
+                            'Unauthorized action.'
+                        );
+                    }
                 }
 
                 /*
@@ -745,7 +774,7 @@ class TravelRequestController extends Controller
                 |--------------------------------------------------------------------------
                 */
                 $travel->update([
-                    'status' => 'cancelled',
+                    'status' => 'Cancelled',
                 ]);
 
                 /*
@@ -756,7 +785,7 @@ class TravelRequestController extends Controller
                 TravelLog::create([
                     'travel_request_id' => $travel->id,
 
-                    'action' => 'cancelled',
+                    'action' => 'Cancelled',
 
                     'description' =>
                         'Travel request cancelled.',
