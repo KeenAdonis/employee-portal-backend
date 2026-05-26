@@ -13,7 +13,7 @@
 
         <!-- ================= HEADER ================= -->
         <div style="background:#111827; padding:20px; text-align:center;">
-            <img src="https://raw.githubusercontent.com/psiopc-int/psi-assets/35f957924703735a6c6c88ec2bee182857b6ef96/psi-logo.png" alt="Psy Systems Logo" style="height:40px; margin-bottom:8px;" />
+            <img src="https://raw.githubusercontent.com/psiopc-int/psi-assets/35f957924703735a6c6c88ec2bee182857b6ef96/psi-logo.png" alt="Logo" style="height:40px; margin-bottom:8px;" />
             <h2 style="color:#ffffff; margin:0; font-size:18px;">
                 Secure Document
             </h2>
@@ -36,22 +36,6 @@
                 We appreciate the opportunity to support your assessment needs and remain committed to providing
                 accurate, timely, and professional services.
             </p>
-
-            <!-- ================= CTA BUTTON ================= -->
-            <div style="text-align:center; margin:25px 0;">
-                <a href="mailto:support@yourdomain.com" style="
-                        display:inline-block;
-                        background:#4f46e5;
-                        color:#ffffff;
-                        padding:12px 20px;
-                        border-radius:8px;
-                        text-decoration:none;
-                        font-size:14px;
-                        font-weight:600;
-                    ">
-                    Contact Support
-                </a>
-            </div>
 
             <!-- ================= DIVIDER ================= -->
             <hr style="margin:25px 0; border:none; border-top:1px solid #e2e8f0;">
@@ -110,7 +94,7 @@
             <strong style="color:#374151;">Psy Systems and Innovations, OPC</strong><br>
             3F Framar Center, 111 A. Mabini St., Brgy. Kapasigan, Pasig City, NCR, Philippines<br>
             Email: testing@psi-services.net<br>
-            Phone: +63 9XX XXX XXXX<br><br>
+            Phone: +63 920 674 2447<br><br>
 
             © 2026 Psy Systems and Innovations, OPC. All rights reserved.
 
