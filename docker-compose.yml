@@ -1,0 +1,135 @@
+services:
+
+  backend:
+    build:
+      context: ./backend
+    container_name: psi-backend
+    restart: unless-stopped
+    working_dir: /var/www
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.psi-api.rule=Host(`psie-portal.psi-services.cloud`) && (PathPrefix(`/api`) || PathPrefix(`/storage`))"
+      - "traefik.http.routers.psi-api.entrypoints=web,websecure"
+      - "traefik.http.routers.psi-api.tls=true"
+      - "traefik.http.routers.psi-api.tls.certresolver=mytlschallenge"
+      - "traefik.http.services.psi-api.loadbalancer.server.port=8000"
+
+    volumes:
+      - ./backend:/var/www
+
+    expose:
+      - "8000"
+
+    networks:
+      - root_default
+
+  queue-worker:
+    build:
+      context: ./backend
+    container_name: psi-queue
+    restart: unless-stopped
+    working_dir: /var/www
+    command: php artisan queue:work
+    volumes:
+      - ./backend:/var/www
+    depends_on:
+      - mysql
+      - redis
+    networks:
+      - root_default
+
+  reverb:
+    build:
+      context: ./backend
+    container_name: psi-reverb
+    restart: unless-stopped
+    working_dir: /var/www
+    command: php artisan reverb:start --host=0.0.0.0 --port=8080
+    volumes:
+      - ./backend:/var/www
+    depends_on:
+      - redis
+    ports:
+      - "8080:8080"
+    networks:
+     - root_default
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+
+    container_name: psi-frontend
+    restart: unless-stopped
+    working_dir: /app
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.psi.rule=Host(`psie-portal.psi-services.cloud`)"
+      - "traefik.http.routers.psi.entrypoints=web,websecure"
+      - "traefik.http.routers.psi.tls=true"
+      - "traefik.http.routers.psi.tls.certresolver=mytlschallenge"
+      - "traefik.http.services.psi.loadbalancer.server.port=3000"
+
+    expose:
+      - "3000"
+
+    networks:
+      - root_default
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: psi-phpmyadmin
+    restart: unless-stopped
+
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      MYSQL_ROOT_PASSWORD: root
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.phpmyadmin.rule=Host(`db.psi-services.cloud`)"
+      - "traefik.http.routers.phpmyadmin.entrypoints=web,websecure"
+      - "traefik.http.routers.phpmyadmin.tls=true"
+      - "traefik.http.routers.phpmyadmin.tls.certresolver=mytlschallenge"
+      - "traefik.http.services.phpmyadmin.loadbalancer.server.port=80"
+      - "traefik.http.middlewares.phpmyadmin-auth.basicauth.users=admin:$$apr1$$BIGSgv8J$$qFX0fgZUuwRLzZgO3lcyy1"
+      - "traefik.http.routers.phpmyadmin.middlewares=phpmyadmin-auth"
+
+    networks:
+      - root_default
+
+  mysql:
+    image: mysql:8
+    container_name: psi-mysql
+    restart: unless-stopped
+
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: psi
+
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+    networks:
+      - root_default
+
+
+  redis:
+    image: redis:alpine
+    container_name: psi-redis
+    restart: unless-stopped
+
+    networks:
+      - root_default
+
+
+networks:
+  root_default:
+    external: true
+
+
+volumes:
+  mysql_data:
